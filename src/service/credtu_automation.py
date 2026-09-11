@@ -2385,14 +2385,17 @@ def gerar_nome_proxima_reciclagem(nome_atual: str) -> str:
     """
     Padrão definitivo do Discador:
 
-      LIGAÇÕES CAPÃO DA CANOA
+      ORIG. LIGAÇÕES CAPÃO DA CANOA.csv
       -> REC1 - LIGAÇÕES CAPÃO DA CANOA | AUTO.R
 
       REC1 - LIGAÇÕES CAPÃO DA CANOA | AUTO.R
       -> REC2 - LIGAÇÕES CAPÃO DA CANOA | AUTO.R
 
-    O REC válido é somente o prefixo REC<n>.
-    AUTO.R fica sempre no final para identificar reciclagem automática.
+    Regras:
+    - ORIG. existe somente na lista original.
+    - Ao gerar a REC1, ORIG. é removido.
+    - REC válido é somente o prefixo REC<n>.
+    - AUTO.R fica sempre no final para identificar reciclagem automática.
     """
     nome = str(nome_atual or "").strip()
 
@@ -2401,6 +2404,7 @@ def gerar_nome_proxima_reciclagem(nome_atual: str) -> str:
             "O nome atual da lista está vazio."
         )
 
+    # Remove o identificador AUTO.R caso a lista já seja uma REC.
     nome_sem_auto = re.sub(
         r"\s*\|\s*AUTO\.R\s*$",
         "",
@@ -2410,11 +2414,23 @@ def gerar_nome_proxima_reciclagem(nome_atual: str) -> str:
 
     match = REC_PREFIX_RE.search(nome_sem_auto)
 
+    # =====================================================
+    # LISTA ORIGINAL -> REC1
+    # =====================================================
     if not match:
         base = re.sub(
             r"\.csv\s*$",
             "",
             nome_sem_auto,
+            flags=re.IGNORECASE,
+        ).strip()
+
+        # ORIG. serve apenas para identificar a lista original.
+        # Ele não deve ser levado para a REC1.
+        base = re.sub(
+            r"^\s*ORIG\.\s*",
+            "",
+            base,
             flags=re.IGNORECASE,
         ).strip()
 
@@ -2425,13 +2441,30 @@ def gerar_nome_proxima_reciclagem(nome_atual: str) -> str:
 
         return f"REC1 - {base} | AUTO.R"
 
+    # =====================================================
+    # LISTA JÁ RECICLADA -> PRÓXIMA REC
+    # =====================================================
     numero_atual = int(match.group(1))
     proximo_numero = numero_atual + 1
 
     base = nome_sem_auto[match.end():].strip()
-    base = re.sub(r"^\s*-\s*", "", base).strip()
+    base = re.sub(
+        r"^\s*-\s*",
+        "",
+        base,
+    ).strip()
+
     base = re.sub(
         r"\.csv\s*$",
+        "",
+        base,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    # Segurança adicional para listas antigas que eventualmente
+    # ainda tenham ORIG. depois do prefixo REC<n>.
+    base = re.sub(
+        r"^\s*ORIG\.\s*",
         "",
         base,
         flags=re.IGNORECASE,
@@ -2443,6 +2476,7 @@ def gerar_nome_proxima_reciclagem(nome_atual: str) -> str:
         )
 
     return f"REC{proximo_numero} - {base} | AUTO.R"
+
 def obter_nome_atual_e_novo(driver):
     log("[AÇÃO NOME] Procurando nome atual da lista na tela de reciclagem...")
 
