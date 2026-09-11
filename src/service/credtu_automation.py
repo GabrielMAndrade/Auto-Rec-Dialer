@@ -1892,501 +1892,6 @@ REC_PREFIX_RE = re.compile(
 )
 
 
-def _env_int(nome, padrao):
-    try:
-        return int(str(os.getenv(nome, padrao)).strip())
-    except Exception:
-        return int(padrao)
-
-
-def _env_float(nome, padrao):
-    try:
-        return float(
-            str(os.getenv(nome, padrao))
-            .strip()
-            .replace(",", ".")
-        )
-    except Exception:
-        return float(padrao)
-
-
-def _col_nome():
-    return _env_int("DIALER_COL_NOME", 2)
-
-
-def _col_clientes():
-    return _env_int("DIALER_COL_CLIENTES", 3)
-
-
-def _col_abandono():
-    # Pelo layout atual do Discador, a taxa (%) está na coluna td[6].
-    # Pode ser alterada no .env sem mexer no código.
-    return _env_int("DIALER_COL_ABANDONO", 6)
-
-
-def _col_data_finalizacao():
-    return _env_int("DIALER_COL_DATA_FINALIZACAO", 7)
-
-
-def _abandono_limite():
-    # Valor em pontos percentuais. Ex.: 1.0 = 1%.
-    return _env_float("DIALER_ABANDONO_STOP_PERCENT", 1.0)
-
-
-def _percentual_restante_limite():
-    # Razão decimal. Ex.: 0.66 = 66%.
-    return _env_float("DIALER_REMAINING_STOP_RATIO", 0.66)
-
-
-def _eh_lista_reciclada(nome):
-    """
-    Considera REC apenas quando o nome COMEÇA com o marcador de reciclagem.
-
-    Isso é intencional. Uma lista original pode conter a palavra REC no meio,
-    como: "TODOS OS LOTES ALL REC 2508.csv", e ainda assim ser original.
-    """
-    return bool(
-        REC_PREFIX_RE.search(
-            str(nome or "").strip()
-        )
-    )
-
-
-def _extrair_inteiro_celula(texto, descricao):
-    texto = str(texto or "").strip()
-
-    if not texto:
-        raise CredtuAutomationError(
-            status="dialer_metric_empty",
-            stage=f"parse_{descricao}",
-            original_error=ValueError(
-                f"A métrica {descricao} está vazia."
-            ),
-        )
-
-    match = re.search(
-        r"\d(?:[\d.\s]*\d)?|\d",
-        texto,
-    )
-
-    if not match:
-        raise CredtuAutomationError(
-            status="dialer_metric_invalid",
-            stage=f"parse_{descricao}",
-            original_error=ValueError(
-                f"Não encontrei inteiro em {descricao}. Texto={texto!r}"
-            ),
-        )
-
-    somente_digitos = re.sub(
-        r"\D",
-        "",
-        match.group(0),
-    )
-
-    if not somente_digitos:
-        raise CredtuAutomationError(
-            status="dialer_metric_invalid",
-            stage=f"parse_{descricao}",
-            original_error=ValueError(
-                f"Não consegui converter {descricao}. Texto={texto!r}"
-            ),
-        )
-
-    return int(somente_digitos)
-
-
-def _extrair_percentual_celula(texto, descricao):
-    texto = str(texto or "").strip()
-
-    if not texto:
-        raise CredtuAutomationError(
-            status="dialer_metric_empty",
-            stage=f"parse_{descricao}",
-            original_error=ValueError(
-                f"A métrica {descricao} está vazia."
-            ),
-        )
-
-    match = re.search(
-        r"-?\d+(?:[.,]\d+)?",
-        texto,
-    )
-
-    if not match:
-        raise CredtuAutomationError(
-            status="dialer_metric_invalid",
-            stage=f"parse_{descricao}",
-            original_error=ValueError(
-                f"Não encontrei percentual em {descricao}. Texto={texto!r}"
-            ),
-        )
-
-    return float(
-        match.group(0).replace(",", ".")
-    )
-
-
-def _texto_celula(linha, coluna):
-    elemento = linha.find_element(
-        By.XPATH,
-        f"./td[{coluna}]",
-    )
-    return texto_elemento(elemento)
-
-
-def _ler_linha_dialer(linha, indice):
-    try:
-        nome = _texto_celula(
-            linha,
-            _col_nome(),
-        )
-    except Exception as erro:
-        raise CredtuAutomationError(
-            status="dialer_row_name_read_error",
-            stage="read_dialer_row_name",
-            original_error=RuntimeError(
-                f"Falha ao ler nome da linha {indice}: "
-                f"{type(erro).__name__}: {erro}"
-            ),
-        ) from erro
-
-    try:
-        clientes_texto = _texto_celula(
-            linha,
-            _col_clientes(),
-        )
-        clientes = _extrair_inteiro_celula(
-            clientes_texto,
-            f"clientes_linha_{indice}",
-        )
-    except CredtuAutomationError:
-        raise
-    except Exception as erro:
-        raise CredtuAutomationError(
-            status="dialer_row_clients_read_error",
-            stage="read_dialer_row_clients",
-            original_error=RuntimeError(
-                f"Falha ao ler clientes da linha {indice}: "
-                f"{type(erro).__name__}: {erro}"
-            ),
-        ) from erro
-
-    try:
-        abandono_texto = _texto_celula(
-            linha,
-            _col_abandono(),
-        )
-        abandono = _extrair_percentual_celula(
-            abandono_texto,
-            f"taxa_abandono_linha_{indice}",
-        )
-    except CredtuAutomationError:
-        raise
-    except Exception as erro:
-        raise CredtuAutomationError(
-            status="dialer_row_abandonment_read_error",
-            stage="read_dialer_row_abandonment",
-            original_error=RuntimeError(
-                f"Falha ao ler taxa de abandono da linha {indice}: "
-                f"{type(erro).__name__}: {erro}"
-            ),
-        ) from erro
-
-    data_finalizacao = ""
-
-    try:
-        data_finalizacao = _texto_celula(
-            linha,
-            _col_data_finalizacao(),
-        )
-    except Exception:
-        # Data é somente diagnóstico; não participa da decisão.
-        data_finalizacao = ""
-
-    return {
-        "indice": indice,
-        "nome": nome,
-        "clientes": clientes,
-        "taxa_abandono": abandono,
-        "data_finalizacao": data_finalizacao,
-        "eh_rec": _eh_lista_reciclada(nome),
-    }
-
-
-def _normalizar_nome_base_dialer(nome):
-    """
-    Normaliza o nome apenas para validar a relação entre
-    a REC atual e a lista original do mesmo bloco.
-    """
-    valor = str(nome or "").strip()
-
-    valor = re.sub(
-        r"\s*\|\s*AUTO\.R\s*$",
-        "",
-        valor,
-        flags=re.IGNORECASE,
-    ).strip()
-
-    match = REC_PREFIX_RE.search(valor)
-    if match:
-        valor = valor[match.end():].strip()
-        valor = re.sub(r"^\s*-\s*", "", valor).strip()
-
-    valor = re.sub(
-        r"\.csv\s*$",
-        "",
-        valor,
-        flags=re.IGNORECASE,
-    ).strip()
-
-    valor = re.sub(r"\s+", " ", valor).strip()
-
-    return valor.casefold()
-
-
-def ler_contexto_listas_dialer(driver):
-    """
-    Descobre dinamicamente o bloco atual.
-
-    - lista atual = última linha visível da tabela;
-    - se a atual não começa com REC<n>, ela própria é a original;
-    - se começa com REC<n>, sobe pelas RECs consecutivas até
-      encontrar a primeira linha anterior que não começa com REC<n>.
-
-    Assim não existe dependência de tr[60], tr[63] etc.
-    """
-    esperar_listas(driver)
-
-    try:
-        linhas = obter_linhas_visiveis(driver)
-    except Exception as erro:
-        raise CredtuAutomationError(
-            status="dialer_lists_read_error",
-            stage="read_dialer_list_rows",
-            original_error=erro,
-        ) from erro
-
-    if not linhas:
-        raise CredtuAutomationError(
-            status="dialer_no_lists_found",
-            stage="validate_dialer_list_rows",
-            original_error=RuntimeError(
-                "Nenhuma lista foi encontrada na tabela do Discador."
-            ),
-        )
-
-    def ler_registros(linhas_atuais):
-        return [
-            _ler_linha_dialer(linha, indice)
-            for indice, linha in enumerate(linhas_atuais, start=1)
-        ]
-
-    try:
-        registros = ler_registros(linhas)
-    except StaleElementReferenceException:
-        log(
-            "[AVISO DIALER] A tabela sofreu re-renderização durante a leitura. "
-            "Relendo todas as linhas uma vez..."
-        )
-        linhas = obter_linhas_visiveis(driver)
-        registros = ler_registros(linhas)
-
-    atual = registros[-1]
-
-    if not atual["eh_rec"]:
-        original = atual
-    else:
-        posicao = len(registros) - 2
-
-        while posicao >= 0 and registros[posicao]["eh_rec"]:
-            posicao -= 1
-
-        if posicao < 0:
-            raise CredtuAutomationError(
-                status="dialer_original_list_not_found",
-                stage="find_original_above_current_rec_block",
-                original_error=RuntimeError(
-                    "A lista atual é uma REC, mas não foi encontrada "
-                    "uma lista original acima do bloco atual de RECs."
-                ),
-            )
-
-        original = registros[posicao]
-
-        base_original = _normalizar_nome_base_dialer(
-            original["nome"]
-        )
-        base_atual = _normalizar_nome_base_dialer(
-            atual["nome"]
-        )
-
-        if (
-            base_original
-            and base_atual
-            and base_original != base_atual
-        ):
-            raise CredtuAutomationError(
-                status="dialer_original_name_mismatch",
-                stage="validate_original_current_block",
-                original_error=RuntimeError(
-                    "A primeira lista não-REC acima do bloco atual "
-                    "não corresponde ao nome-base da REC atual. "
-                    f"original={original['nome']!r}; "
-                    f"atual={atual['nome']!r}"
-                ),
-            )
-
-    if original["clientes"] <= 0:
-        raise CredtuAutomationError(
-            status="dialer_original_clients_invalid",
-            stage="validate_dialer_original_clients",
-            original_error=ValueError(
-                "A quantidade de clientes da lista original precisa "
-                "ser maior que zero. "
-                f"Valor encontrado: {original['clientes']}"
-            ),
-        )
-
-    return {
-        "quantidade_listas": len(registros),
-        "lista_original": original,
-        "lista_atual": atual,
-    }
-def avaliar_regra_reciclagem_dialer(
-    taxa_abandono,
-    tamanho_lista_original,
-    tamanho_lista_atual,
-):
-    """
-    REGRA DEFINITIVA DO Discador
-
-    Só PARA de reciclar quando AS DUAS condições forem verdadeiras
-    simultaneamente:
-
-      1) taxa de abandono < 1%
-      2) lista atual / lista original < 66%
-
-    Em qualquer outro cenário, continua reciclando.
-
-    Limites são configuráveis via .env, mas os defaults são:
-      DIALER_ABANDONO_STOP_PERCENT=1.0
-      DIALER_REMAINING_STOP_RATIO=0.66
-    """
-    if tamanho_lista_original <= 0:
-        raise ValueError(
-            "tamanho_lista_original precisa ser maior que zero."
-        )
-
-    percentual_restante = (
-        float(tamanho_lista_atual)
-        / float(tamanho_lista_original)
-    )
-
-    limite_abandono = _abandono_limite()
-    limite_restante = _percentual_restante_limite()
-
-    condicao_parada_abandono = (
-        float(taxa_abandono)
-        < limite_abandono
-    )
-
-    condicao_parada_tamanho = (
-        percentual_restante
-        < limite_restante
-    )
-
-    pode_parar = (
-        condicao_parada_abandono
-        and condicao_parada_tamanho
-    )
-
-    deve_reciclar = not pode_parar
-
-    return {
-        "taxa_abandono_percent": float(taxa_abandono),
-        "limite_abandono_percent": limite_abandono,
-        "tamanho_lista_original": int(tamanho_lista_original),
-        "tamanho_lista_atual": int(tamanho_lista_atual),
-        "percentual_restante": percentual_restante,
-        "percentual_restante_percent": round(
-            percentual_restante * 100,
-            4,
-        ),
-        "limite_restante": limite_restante,
-        "limite_restante_percent": round(
-            limite_restante * 100,
-            4,
-        ),
-        "condicao_parada_abandono": condicao_parada_abandono,
-        "condicao_parada_tamanho": condicao_parada_tamanho,
-        "pode_parar": pode_parar,
-        "deve_reciclar": deve_reciclar,
-    }
-
-
-def avaliar_se_deve_reciclar_dialer(driver):
-    contexto = ler_contexto_listas_dialer(
-        driver
-    )
-
-    original = contexto["lista_original"]
-    atual = contexto["lista_atual"]
-
-    regra = avaliar_regra_reciclagem_dialer(
-        taxa_abandono=atual["taxa_abandono"],
-        tamanho_lista_original=original["clientes"],
-        tamanho_lista_atual=atual["clientes"],
-    )
-
-    log("===================================================")
-    log(" DIALER | ANÁLISE PARA RECICLAGEM ")
-    log("===================================================")
-    log(
-        f"[DIALER] Original: linha={original['indice']} | "
-        f"nome={original['nome']!r} | "
-        f"clientes={original['clientes']} | "
-        f"finalizada={original['data_finalizacao']!r}"
-    )
-    log(
-        f"[DIALER] Atual: linha={atual['indice']} | "
-        f"nome={atual['nome']!r} | "
-        f"clientes={atual['clientes']} | "
-        f"abandono={atual['taxa_abandono']}% | "
-        f"finalizada={atual['data_finalizacao']!r}"
-    )
-    log(
-        f"[DIALER] Restante vs original: "
-        f"{regra['percentual_restante_percent']}%"
-    )
-    log(
-        f"[DIALER] Condição de parada 1 | abandono < "
-        f"{regra['limite_abandono_percent']}%: "
-        f"{regra['condicao_parada_abandono']}"
-    )
-    log(
-        f"[DIALER] Condição de parada 2 | restante < "
-        f"{regra['limite_restante_percent']}%: "
-        f"{regra['condicao_parada_tamanho']}"
-    )
-    log(
-        f"[DIALER] DECISÃO: "
-        f"{'RECICLAR' if regra['deve_reciclar'] else 'NÃO RECICLAR'}"
-    )
-    log("===================================================")
-
-    return {
-        "quantidade_listas": contexto["quantidade_listas"],
-        "lista_original_nome": original["nome"],
-        "lista_original_linha": original["indice"],
-        "lista_original_data": original["data_finalizacao"],
-        "lista_atual_nome": atual["nome"],
-        "lista_atual_linha": atual["indice"],
-        "lista_atual_data": atual["data_finalizacao"],
-        **regra,
-    }
-
-
 def clicar_opcoes_da_ultima_lista(driver):
     esperar_listas(driver)
 
@@ -2406,7 +1911,7 @@ def clicar_opcoes_da_ultima_lista(driver):
             status="latest_list_not_found",
             stage="select_latest_list_row",
             original_error=RuntimeError(
-                "Nenhuma lista de URA foi encontrada."
+                "Nenhuma lista do Discador foi encontrada."
             ),
         )
 
@@ -3300,20 +2805,27 @@ def executar_reciclagem(campaign_id: str) -> dict:
     """
     Auto Reciclagem do Discador.
 
+    IMPORTANTE:
+    Este serviço NÃO decide se uma lista deve ou não ser reciclada.
+
+    A decisão pertence ao fluxo do n8n.
+
+    Sempre que o endpoint /api/recycle chamar esta função com um
+    campaign_id válido, a automação seguirá diretamente para a
+    reciclagem da lista mais atual da campanha.
+
     Fluxo:
       1. Chrome
       2. Login + 2FA
-      3. Campanha
+      3. Abre a campanha
       4. NÃO entra na aba URA
       5. Abre todas as listas
-      6. Identifica a original mais recente e a lista atual
-      7. Avalia a regra:
-           para SOMENTE se abandono < 1% E restante < 66%
-      8. Se deve reciclar, abre as opções da última lista
-      9. Reciclar
-     10. Marca checkboxes 1, 2, 4, 5 e 6
-     11. Gera REC<n+1> - nome base
-     12. Confirma
+      6. Seleciona a lista mais atual
+      7. Abre Reciclar
+      8. Gera o próximo nome REC<n> ... | AUTO.R
+      9. Marca checkboxes 1, 2, 4, 5 e 6
+     10. Preenche o novo nome
+     11. Confirma a reciclagem
     """
     campaign_id = str(
         campaign_id or ""
@@ -3334,12 +2846,11 @@ def executar_reciclagem(campaign_id: str) -> dict:
     driver = None
     nome_atual = None
     novo_nome = None
-    metricas = None
 
     try:
         log("===================================================")
         log(
-            f" AUTO RECICLAGEM Discador | "
+            f" AUTO RECICLAGEM DISCAdor | "
             f"CAMPANHA {campaign_id}"
         )
         log("===================================================")
@@ -3368,7 +2879,8 @@ def executar_reciclagem(campaign_id: str) -> dict:
             campaign_id,
         )
 
-        # IMPORTANTE: NÃO CHAMA abrir_ura().
+        # O Discador permanece na aba LISTAS.
+        # Não chama abrir_ura().
         log(
             "[DIALER] Campanha aberta. "
             "Permanecendo na aba LISTAS; aba URA não será acessada."
@@ -3382,38 +2894,14 @@ def executar_reciclagem(campaign_id: str) -> dict:
             driver,
         )
 
-        # 5. Regra de decisão
-        metricas = executar_etapa(
-            "dialer_evaluation_error",
-            "dialer_evaluate_recycle",
-            avaliar_se_deve_reciclar_dialer,
-            driver,
-        )
-
-        if not metricas["deve_reciclar"]:
-            log(
-                "[DIALER] As DUAS condições de parada foram atendidas. "
-                "A lista NÃO será reciclada."
-            )
-
-            return {
-                "ok": True,
-                "status": "recycle_not_needed",
-                "campaign_id": campaign_id,
-                "recycled": False,
-                "reason": (
-                    "taxa_abandono_abaixo_limite_e_"
-                    "lista_atual_abaixo_percentual_da_original"
-                ),
-                **metricas,
-            }
-
+        # Não existe condição de abandono, percentual restante ou
+        # tamanho de lista aqui. Se o n8n chamou, devemos reciclar.
         log(
-            "[DIALER] Pelo menos uma condição de parada ainda não foi atendida. "
-            "Continuando com a reciclagem."
+            "[DIALER] Solicitação recebida do n8n. "
+            "Seguindo diretamente com a reciclagem."
         )
 
-        # 6. Última lista
+        # 5. Selecionar a lista mais atual
         ultima_linha = executar_etapa(
             "dialer_latest_list_error",
             "dialer_select_latest_list",
@@ -3421,7 +2909,7 @@ def executar_reciclagem(campaign_id: str) -> dict:
             driver,
         )
 
-        # 7. Abrir reciclagem
+        # 6. Abrir reciclagem
         executar_etapa(
             "dialer_recycle_open_error",
             "dialer_open_recycle",
@@ -3430,7 +2918,7 @@ def executar_reciclagem(campaign_id: str) -> dict:
             ultima_linha,
         )
 
-        # 8. Nome
+        # 7. Ler nome atual e gerar próxima REC
         nome_atual, novo_nome = executar_etapa(
             "dialer_list_name_error",
             "dialer_generate_list_name",
@@ -3438,7 +2926,7 @@ def executar_reciclagem(campaign_id: str) -> dict:
             driver,
         )
 
-        # 9. Checkboxes: 1, 2, 4, 5 e 6
+        # 8. Checkboxes do Discador: 1, 2, 4, 5 e 6
         executar_etapa(
             "dialer_checkbox_error",
             "dialer_mark_recycle_options",
@@ -3446,7 +2934,7 @@ def executar_reciclagem(campaign_id: str) -> dict:
             driver,
         )
 
-        # 10. Preencher nome
+        # 9. Preencher novo nome
         executar_etapa(
             "dialer_list_name_fill_error",
             "dialer_fill_new_list_name",
@@ -3455,7 +2943,7 @@ def executar_reciclagem(campaign_id: str) -> dict:
             novo_nome,
         )
 
-        # 11. Confirmar
+        # 10. Confirmar
         executar_etapa(
             "dialer_recycle_confirm_error",
             "dialer_confirm_recycle",
@@ -3475,7 +2963,6 @@ def executar_reciclagem(campaign_id: str) -> dict:
             "recycled": True,
             "nome_anterior": nome_atual,
             "novo_nome": novo_nome,
-            **metricas,
         }
 
     except CredtuAutomationError as erro:
