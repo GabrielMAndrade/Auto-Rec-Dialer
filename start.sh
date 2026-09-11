@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 cd "$(dirname "$0")"
 
@@ -8,6 +8,7 @@ if [ ! -d ".venv" ]; then
 fi
 
 source .venv/bin/activate
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 
 python -m src.application.main

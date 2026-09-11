@@ -1,3 +1,11 @@
 {
-  "campaign_id": "{{ $('Infos. Campanha').item.json.idCampanha }}"
+  "method": "POST",
+  "url": "http://IP_DA_VPS:6777/api/recycle",
+  "headers": {
+    "Authorization": "Bearer <DIALER_N8N_API_TOKEN>",
+    "Content-Type": "application/json"
+  },
+  "body": {
+    "campaign_id": "{{ $('Infos. Campanha').item.json.idCampanha }}"
+  }
 }

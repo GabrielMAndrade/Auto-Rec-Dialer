@@ -1,0 +1,16 @@
+[Unit]
+Description=Auto Reciclagem 3C - Discador
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/node/Auto-Recycle-Dialer
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/node/Auto-Recycle-Dialer/.venv/bin/python -m src.application.main
+Restart=always
+RestartSec=5
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
