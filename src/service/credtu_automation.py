@@ -2383,19 +2383,22 @@ def clicar_reciclar(driver, ultima_linha):
 
 def gerar_nome_proxima_reciclagem(nome_atual: str) -> str:
     """
-    Padrão definitivo do Discador:
+    Regra do Discador:
 
-      ORIG. LIGAÇÕES CAPÃO DA CANOA.csv
-      -> REC1 - LIGAÇÕES CAPÃO DA CANOA | AUTO.R
+      LISTA TESTE.csv
+      -> REC1 - LISTA TESTE | AUTO.R
 
-      REC1 - LIGAÇÕES CAPÃO DA CANOA | AUTO.R
-      -> REC2 - LIGAÇÕES CAPÃO DA CANOA | AUTO.R
+      REC1 - LISTA TESTE | AUTO.R
+      -> REC2 - LISTA TESTE | AUTO.R
 
-    Regras:
-    - ORIG. existe somente na lista original.
-    - Ao gerar a REC1, ORIG. é removido.
-    - REC válido é somente o prefixo REC<n>.
-    - AUTO.R fica sempre no final para identificar reciclagem automática.
+    Regra de identificação:
+    - se NÃO houver "REC" no nome, a lista é considerada original;
+    - se houver "REC", ela é considerada uma lista reciclada;
+    - para gerar a próxima REC, listas recicladas devem começar com REC<n>;
+    - AUTO.R permanece no final das listas criadas automaticamente.
+
+    Esta função não encerra o serviço/API. Qualquer erro de nome é tratado
+    pelo fluxo estruturado da automação e devolvido ao n8n como erro da execução.
     """
     nome = str(nome_atual or "").strip()
 
@@ -2404,7 +2407,7 @@ def gerar_nome_proxima_reciclagem(nome_atual: str) -> str:
             "O nome atual da lista está vazio."
         )
 
-    # Remove o identificador AUTO.R caso a lista já seja uma REC.
+    # Remove somente o marcador criado pela própria automação.
     nome_sem_auto = re.sub(
         r"\s*\|\s*AUTO\.R\s*$",
         "",
@@ -2412,25 +2415,15 @@ def gerar_nome_proxima_reciclagem(nome_atual: str) -> str:
         flags=re.IGNORECASE,
     ).strip()
 
-    match = REC_PREFIX_RE.search(nome_sem_auto)
+    # Regra solicitada:
+    # se não existe "REC" em nenhum ponto do nome, é a lista original.
+    contem_rec = "REC" in nome_sem_auto.upper()
 
-    # =====================================================
-    # LISTA ORIGINAL -> REC1
-    # =====================================================
-    if not match:
+    if not contem_rec:
         base = re.sub(
             r"\.csv\s*$",
             "",
             nome_sem_auto,
-            flags=re.IGNORECASE,
-        ).strip()
-
-        # ORIG. serve apenas para identificar a lista original.
-        # Ele não deve ser levado para a REC1.
-        base = re.sub(
-            r"^\s*ORIG\.\s*",
-            "",
-            base,
             flags=re.IGNORECASE,
         ).strip()
 
@@ -2441,13 +2434,24 @@ def gerar_nome_proxima_reciclagem(nome_atual: str) -> str:
 
         return f"REC1 - {base} | AUTO.R"
 
-    # =====================================================
-    # LISTA JÁ RECICLADA -> PRÓXIMA REC
-    # =====================================================
+    # Se contém REC, procuramos o padrão das listas geradas:
+    # REC1 -, REC2 -, REC3 -, ...
+    match = REC_PREFIX_RE.search(nome_sem_auto)
+
+    if not match:
+        raise RuntimeError(
+            "A lista contém 'REC' no nome, portanto não é considerada "
+            "original, mas também não começa com o padrão REC<n>. "
+            f"Nome recebido: {nome_atual!r}"
+        )
+
     numero_atual = int(match.group(1))
     proximo_numero = numero_atual + 1
 
     base = nome_sem_auto[match.end():].strip()
+
+    # REC_PREFIX_RE pode terminar antes ou depois do hífen,
+    # então removemos um hífen residual com segurança.
     base = re.sub(
         r"^\s*-\s*",
         "",
@@ -2461,21 +2465,13 @@ def gerar_nome_proxima_reciclagem(nome_atual: str) -> str:
         flags=re.IGNORECASE,
     ).strip()
 
-    # Segurança adicional para listas antigas que eventualmente
-    # ainda tenham ORIG. depois do prefixo REC<n>.
-    base = re.sub(
-        r"^\s*ORIG\.\s*",
-        "",
-        base,
-        flags=re.IGNORECASE,
-    ).strip()
-
     if not base:
         raise RuntimeError(
             f"Não consegui extrair o nome base da lista: {nome_atual!r}"
         )
 
     return f"REC{proximo_numero} - {base} | AUTO.R"
+
 
 def obter_nome_atual_e_novo(driver):
     log("[AÇÃO NOME] Procurando nome atual da lista na tela de reciclagem...")
